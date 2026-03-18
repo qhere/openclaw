@@ -134,7 +134,10 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      procps hostname curl git openssl
+      procps hostname curl git openssl python3 python3-pip
+
+# 57-Claws: beautifulsoup4 + requests for web scraping tools used by agents
+RUN pip install --no-cache-dir --break-system-packages beautifulsoup4 requests
 
 RUN chown node:node /app
 
