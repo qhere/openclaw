@@ -1,0 +1,338 @@
+# 57-Claws Fork Sync & Build
+#
+# Automates the upstream merge → patch verification → Docker build → registry push
+# workflow for the 57-Claws OpenClaw fork.
+#
+# Triggers:
+#   - Manual dispatch (specify upstream tag to merge)
+#   - Scheduled check for new upstream releases (daily)
+#
+# Required secrets:
+#   DIGITALOCEAN_ACCESS_TOKEN  — DO API token with read/write registry access
+#
+# The workflow will:
+#   1. Merge the specified upstream tag into our fork
+#   2. Verify our Dockerfile patch survived the merge
+#   3. Build the Docker image (linux/amd64)
+#   4. Push to DO container registry
+#   5. Push the updated fork branch
+#   6. Create a GitHub release with the build details
+
+name: "57-Claws: Sync Upstream & Build"
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream tag to merge (e.g., v2026.4.1)"
+        required: true
+        type: string
+      dry_run:
+        description: "Dry run — merge and verify only, skip build/push"
+        required: false
+        type: boolean
+        default: false
+
+  schedule:
+    # Check for new upstream releases daily at 06:00 UTC
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: write
+
+env:
+  REGISTRY: registry.digitalocean.com
+  REGISTRY_NAME: claws-cloud-registry
+  IMAGE_NAME: openclaw
+
+jobs:
+  # ------------------------------------------------------------------
+  # Job 1: Check for new upstream releases (scheduled runs only)
+  # ------------------------------------------------------------------
+  check-upstream:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.check.outputs.new_tag }}
+      has_new: ${{ steps.check.outputs.has_new }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/openclaw/openclaw.git
+
+      - name: Fetch upstream tags
+        run: git fetch upstream --tags
+
+      - name: Check for new stable release
+        id: check
+        run: |
+          # Get the latest upstream stable tag (vYYYY.M.D or vYYYY.M.D-N, not beta)
+          LATEST_UPSTREAM=$(git tag -l 'v2*' --sort=-version:refname \
+            | grep -v beta | head -1)
+
+          # Get the tag our fork is currently based on
+          # (last upstream tag reachable from HEAD)
+          CURRENT_BASE=$(git describe --tags --match 'v2*' --abbrev=0 HEAD 2>/dev/null || echo "none")
+
+          echo "Latest upstream: $LATEST_UPSTREAM"
+          echo "Current base:    $CURRENT_BASE"
+
+          if [ "$LATEST_UPSTREAM" != "$CURRENT_BASE" ] && [ -n "$LATEST_UPSTREAM" ]; then
+            echo "new_tag=$LATEST_UPSTREAM" >> "$GITHUB_OUTPUT"
+            echo "has_new=true" >> "$GITHUB_OUTPUT"
+            echo "New upstream release detected: $LATEST_UPSTREAM"
+          else
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date."
+          fi
+
+  # ------------------------------------------------------------------
+  # Job 2: Sync, verify, build, push
+  # ------------------------------------------------------------------
+  sync-and-build:
+    runs-on: ubuntu-latest
+    # Run on manual dispatch always, on schedule only if new tag found
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (needs.check-upstream.outputs.has_new == 'true')
+    needs: [check-upstream]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a PAT or GITHUB_TOKEN with push access
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve upstream tag
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.upstream_tag }}"
+          else
+            TAG="${{ needs.check-upstream.outputs.new_tag }}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Upstream tag to merge: $TAG"
+
+      - name: Configure git
+        run: |
+          git config user.name "57-Claws Bot"
+          git config user.email "bot@57claws.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream --tags
+          git fetch upstream main
+
+      - name: Verify upstream tag exists
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Upstream tag $TAG not found"
+            exit 1
+          fi
+          echo "Tag $TAG resolved to $(git rev-parse refs/tags/$TAG)"
+
+      # ---- Merge upstream ----
+      - name: Merge upstream tag
+        id: merge
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          echo "Merging upstream $TAG into fork..."
+
+          # Attempt the merge
+          if git merge "$TAG" --no-edit -m "merge: upstream $TAG into 57-claws fork"; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            echo "Merge succeeded cleanly."
+          else
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Merge has conflicts. Attempting auto-resolve for Dockerfile..."
+
+            # Check if only Dockerfile conflicts
+            CONFLICTED=$(git diff --name-only --diff-filter=U)
+            if [ "$CONFLICTED" = "Dockerfile" ]; then
+              echo "Only Dockerfile conflict — resolving with our version..."
+              git checkout --ours Dockerfile
+              git add Dockerfile
+              git commit --no-edit -m "merge: upstream $TAG — resolved Dockerfile conflict (kept 57-claws patch)"
+              echo "conflict=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Conflicts in files beyond Dockerfile: $CONFLICTED"
+              echo "Manual resolution required."
+              git merge --abort
+              exit 1
+            fi
+          fi
+
+      # ---- Verify our patch survived ----
+      - name: Verify 57-Claws Dockerfile patch
+        id: verify
+        run: |
+          echo "Checking Dockerfile for 57-Claws customizations..."
+
+          CHECKS_PASSED=0
+          CHECKS_TOTAL=3
+
+          # Check 1: python3 in apt-get
+          if grep -q 'python3 python3-pip' Dockerfile; then
+            echo "  [PASS] python3 + pip present in apt-get"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] python3 + pip missing from apt-get install"
+          fi
+
+          # Check 2: beautifulsoup4 pip install
+          if grep -q 'beautifulsoup4' Dockerfile; then
+            echo "  [PASS] beautifulsoup4 pip install present"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] beautifulsoup4 pip install missing"
+          fi
+
+          # Check 3: requests pip install
+          if grep -q 'requests' Dockerfile; then
+            echo "  [PASS] requests pip install present"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] requests pip install missing"
+          fi
+
+          echo ""
+          echo "Patch verification: $CHECKS_PASSED/$CHECKS_TOTAL passed"
+
+          if [ "$CHECKS_PASSED" -ne "$CHECKS_TOTAL" ]; then
+            echo "::error::Dockerfile patch verification failed ($CHECKS_PASSED/$CHECKS_TOTAL). The upstream merge may have overwritten our customizations."
+            echo "patch_ok=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          echo "patch_ok=true" >> "$GITHUB_OUTPUT"
+
+      # ---- Check for breaking changes in device auth protocol ----
+      - name: Check for device auth protocol changes
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          CURRENT_BASE=$(git describe --tags --match 'v2*' --abbrev=0 HEAD~1 2>/dev/null || echo "HEAD~1")
+
+          echo "Checking for breaking changes in device auth protocol..."
+          CHANGED_FILES=$(git diff --name-only "$CURRENT_BASE".."$TAG" -- \
+            src/gateway/device-auth.ts \
+            src/gateway/protocol/schema/frames.ts \
+            src/gateway/protocol/client-info.ts \
+            src/gateway/server/ws-connection/handshake-auth-helpers.ts \
+            2>/dev/null || true)
+
+          if [ -n "$CHANGED_FILES" ]; then
+            echo "::warning::Device auth protocol files changed in this release:"
+            echo "$CHANGED_FILES"
+            echo ""
+            echo "Review these changes — they may affect the auto-approve script"
+            echo "and Paperclip adapter connectivity."
+            echo ""
+            echo "Relevant files in 57-claws monorepo:"
+            echo "  - docs/bugs/v001-staging-bugs.md (BUG-1: device pairing)"
+            echo "  - docs/openclaw-customizations.md (section 5)"
+          else
+            echo "No device auth protocol changes detected."
+          fi
+
+      # ---- Build Docker image ----
+      - name: Set up Docker Buildx
+        if: inputs.dry_run != true
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install doctl
+        if: inputs.dry_run != true
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DO Container Registry
+        if: inputs.dry_run != true
+        run: doctl registries login --expiry-seconds 1200
+
+      - name: Compute image tag
+        id: image_tag
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          # Our convention: upstream tag + "-1" suffix for fork builds
+          IMAGE_TAG="${TAG}-57claws"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $IMAGE_TAG"
+
+      - name: Build Docker image
+        if: inputs.dry_run != true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_NAME }}/${{ env.IMAGE_NAME }}:${{ steps.image_tag.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.REGISTRY_NAME }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- Push updated fork ----
+      - name: Push updated fork
+        run: |
+          git push origin main
+
+      # ---- Summary ----
+      - name: Create summary
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          IMAGE_TAG="${{ steps.image_tag.outputs.image_tag }}"
+          DRY_RUN="${{ inputs.dry_run }}"
+
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## 57-Claws Fork Sync Complete
+
+          | Item | Value |
+          |------|-------|
+          | Upstream tag | \`$TAG\` |
+          | Merge conflicts | ${{ steps.merge.outputs.conflict }} |
+          | Patch verification | ${{ steps.verify.outputs.patch_ok && 'PASS' || 'FAIL' }} |
+          | Image tag | \`$IMAGE_TAG\` |
+          | Dry run | $DRY_RUN |
+
+          ### Dockerfile Patch Status
+          - python3 + pip: present
+          - beautifulsoup4: present
+          - requests: present
+
+          ### Next Steps
+          1. Update tenant template \`OPENCLAW_VERSION\` to \`$IMAGE_TAG\`
+          2. Test on staging worker before production rollout
+          3. Verify device auth + model connectivity
+          EOF
+
+      - name: Create GitHub release
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          IMAGE_TAG="${{ steps.image_tag.outputs.image_tag }}"
+
+          gh release create "$IMAGE_TAG" \
+            --title "57-Claws OpenClaw $IMAGE_TAG" \
+            --notes "$(cat <<EOF
+          Synced with upstream OpenClaw [\`$TAG\`](https://github.com/openclaw/openclaw/releases/tag/$TAG).
+
+          ## 57-Claws Customizations
+          - Dockerfile: python3 + beautifulsoup4 + requests (agent web scraping tools)
+
+          ## Docker Image
+          \`\`\`
+          docker pull ${{ env.REGISTRY }}/${{ env.REGISTRY_NAME }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          \`\`\`
+
+          ## Deployment
+          Update \`OPENCLAW_VERSION=$IMAGE_TAG\` in tenant template and restart.
+          EOF
+          )"
