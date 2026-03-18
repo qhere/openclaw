@@ -95,9 +95,12 @@ jobs:
   sync-and-build:
     runs-on: ubuntu-latest
     # Run on manual dispatch always, on schedule only if new tag found
+    # always() needed because check-upstream is skipped on non-schedule events
     if: >
-      github.event_name == 'workflow_dispatch' ||
-      (needs.check-upstream.outputs.has_new == 'true')
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        (needs.check-upstream.outputs.has_new == 'true')
+      )
     needs: [check-upstream]
     steps:
       - uses: actions/checkout@v4
