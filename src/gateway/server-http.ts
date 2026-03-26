@@ -959,10 +959,30 @@ export function attachGatewayUpgradeHandler(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /**
+   * 57-Claws Phase 5: optional path pattern for upgrade paths handled by a
+   * separate listener (e.g. /api/browser-sessions/:id/cdp).  When provided,
+   * the gateway upgrade handler returns early so those sockets are not double-
+   * consumed by the main wss.handleUpgrade call.
+   */
+  reservedUpgradePathPattern?: RegExp;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    resolvedAuth,
+    rateLimiter,
+    reservedUpgradePathPattern,
+  } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // 57-Claws Phase 5: yield to a sibling upgrade handler for reserved paths
+      // (e.g. /api/browser-sessions/:id/cdp) so the socket is not consumed here.
+      if (reservedUpgradePathPattern?.test(req.url ?? "/")) {
+        return;
+      }
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });

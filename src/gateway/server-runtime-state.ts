@@ -207,6 +207,22 @@ export async function createGatewayRuntimeState(params: {
     noServer: true,
     maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
   });
+
+  // 57-Claws Phase 5: T2 CDP WebSocket proxy — must be registered BEFORE the
+  // gateway upgrade handler.  The gateway upgrade handler wraps its logic in an
+  // async IIFE; all Node.js upgrade listeners are invoked synchronously in
+  // registration order.  By registering the CDP handler first, it intercepts
+  // /api/browser-sessions/:id/cdp paths synchronously and the gateway async
+  // IIFE is told to skip those paths via `reservedUpgradePathPattern`, so the
+  // socket is never double-consumed.
+  if (openclawGatewayToken) {
+    for (const server of httpServers) {
+      attachBrowserSessionCdpWs({ server, wss, openclawGatewayToken });
+    }
+  }
+
+  // CDP_PATH_RE kept in sync with browser-session-ws.ts
+  const CDP_UPGRADE_PATH_RE = /^\/api\/browser-sessions\/[^/]+\/cdp$/;
   for (const server of httpServers) {
     attachGatewayUpgradeHandler({
       httpServer: server,
@@ -215,16 +231,8 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      reservedUpgradePathPattern: openclawGatewayToken ? CDP_UPGRADE_PATH_RE : undefined,
     });
-  }
-
-  // 57-Claws Phase 5: T2 CDP WebSocket proxy — registers its own 'upgrade'
-  // listener on each HTTP server so /api/browser-sessions/:id/cdp is reachable.
-  // Only wired when OPENCLAW_GATEWAY_TOKEN is set.
-  if (openclawGatewayToken) {
-    for (const server of httpServers) {
-      attachBrowserSessionCdpWs({ server, wss, openclawGatewayToken });
-    }
   }
 
   const agentRunSeq = new Map<string, number>();

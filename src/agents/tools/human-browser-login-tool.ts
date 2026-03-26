@@ -214,6 +214,16 @@ export function createHumanBrowserLoginTool(opts: {
         await promise;
       } finally {
         clearTimeout(timer);
+        // Detach the CDP session if the T2 handler never connected (e.g. timeout
+        // or rejection before any client joined).  The T2 ws-close handler also
+        // calls detach(), so we swallow errors here for the double-detach case.
+        if (!entry.resolved) {
+          try {
+            await cdpSession.detach();
+          } catch {
+            // Already detached — ignore
+          }
+        }
         // Remove the entry so completed sessions do not accumulate indefinitely
         // in the map (prevents memory leak in long-running processes).
         pendingSessionsMap.delete(sessionId);
