@@ -66,6 +66,7 @@ export function shouldSkipBackendSelfPairing(params: {
   hasBrowserOriginHeader: boolean;
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  trustAuthenticatedBackend?: boolean;
 }): boolean {
   const isGatewayBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -74,12 +75,16 @@ export function shouldSkipBackendSelfPairing(params: {
     return false;
   }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  return (
-    params.isLocalClient &&
-    !params.hasBrowserOriginHeader &&
-    params.sharedAuthOk &&
-    usesSharedSecretAuth
-  );
+  if (!params.sharedAuthOk || !usesSharedSecretAuth) {
+    return false;
+  }
+  // When OPENCLAW_TRUST_BACKEND_AUTH is set (e.g. Docker deployments where
+  // Paperclip connects over a bridge network), skip the loopback check for
+  // backend clients that already passed shared-secret authentication.
+  if (params.trustAuthenticatedBackend) {
+    return !params.hasBrowserOriginHeader;
+  }
+  return params.isLocalClient && !params.hasBrowserOriginHeader;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {

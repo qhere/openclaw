@@ -674,6 +674,7 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        const trustAuthenticatedBackend = process.env.OPENCLAW_TRUST_BACKEND_AUTH === "true";
         const skipPairing =
           shouldSkipBackendSelfPairing({
             connectParams,
@@ -681,6 +682,7 @@ export function attachGatewayWsMessageHandler(params: {
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
+            trustAuthenticatedBackend,
           }) || shouldSkipControlUiPairing(controlUiAuthPolicy, role, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {

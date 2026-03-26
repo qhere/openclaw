@@ -12,6 +12,7 @@ import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createHumanBrowserLoginTool } from "./tools/human-browser-login-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -136,12 +137,25 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  // Human browser login tool: only available when Paperclip integration is configured.
+  // Env vars: OPENCLAW_PAPERCLIP_API_URL, OPENCLAW_GATEWAY_TOKEN
+  const paperclipApiUrl = process.env.OPENCLAW_PAPERCLIP_API_URL?.trim();
+  const openclawGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const humanBrowserLoginTool =
+    paperclipApiUrl && openclawGatewayToken
+      ? createHumanBrowserLoginTool({
+          paperclipApiUrl,
+          openclawGatewayToken,
+        })
+      : null;
+
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
       agentSessionKey: options?.agentSessionKey,
     }),
+    ...(humanBrowserLoginTool ? [humanBrowserLoginTool] : []),
     createCanvasTool({ config: options?.config }),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
