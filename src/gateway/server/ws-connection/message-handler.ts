@@ -98,6 +98,11 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 
+// 57-Claws: one-time startup warning for OPENCLAW_TRUST_BACKEND_AUTH bypass.
+// Emitted on the first connection that sees the flag set so it appears in logs
+// without requiring a separate startup hook.
+let _trustBackendAuthWarnEmitted = false;
+
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
@@ -674,6 +679,17 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        const trustAuthenticatedBackend = process.env.OPENCLAW_TRUST_BACKEND_AUTH === "true";
+        // 57-Claws: emit a one-time audit warning when the loopback bypass is
+        // active so operators can detect misconfigured deployments in logs.
+        if (trustAuthenticatedBackend && !_trustBackendAuthWarnEmitted) {
+          _trustBackendAuthWarnEmitted = true;
+          logGateway.warn(
+            "⚠️  OPENCLAW_TRUST_BACKEND_AUTH=true — shouldSkipBackendSelfPairing loopback check " +
+              "is bypassed. Use only on trusted internal networks; never expose this gateway to " +
+              "the public internet with this flag enabled.",
+          );
+        }
         const skipPairing =
           shouldSkipBackendSelfPairing({
             connectParams,
@@ -681,6 +697,7 @@ export function attachGatewayWsMessageHandler(params: {
             hasBrowserOriginHeader,
             sharedAuthOk,
             authMethod,
+            trustAuthenticatedBackend,
           }) || shouldSkipControlUiPairing(controlUiAuthPolicy, role, trustedProxyAuthOk);
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {

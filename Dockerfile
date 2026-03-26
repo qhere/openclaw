@@ -137,7 +137,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       procps hostname curl git openssl python3 python3-pip
 
 # 57-Claws: beautifulsoup4 + requests for web scraping tools used by agents
-RUN pip install --no-cache-dir --break-system-packages beautifulsoup4 requests
+# Pin versions for reproducible builds (update intentionally, not on every upstream merge)
+RUN pip install --no-cache-dir --break-system-packages beautifulsoup4==4.12.3 requests==2.32.3
 
 RUN chown node:node /app
 

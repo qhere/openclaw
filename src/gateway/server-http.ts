@@ -731,6 +731,12 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
+  /**
+   * 57-Claws Phase 5: optional handler for browser-session HTTP requests
+   * (POST /api/browser-sessions/:id/resume). Returns true if the request was
+   * handled so the stage pipeline can short-circuit.
+   */
+  handleBrowserSessionsRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): HttpServer {
   const {
     canvasHost,
@@ -749,6 +755,7 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
     getReadiness,
+    handleBrowserSessionsRequest,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -786,6 +793,16 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(requestPath)
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
+        // 57-Claws Phase 5: browser-session resume endpoint (T3) runs first so
+        // it is reachable regardless of other feature flags.
+        ...(handleBrowserSessionsRequest
+          ? [
+              {
+                name: "browser-sessions",
+                run: () => handleBrowserSessionsRequest(req, res),
+              },
+            ]
+          : []),
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
@@ -942,10 +959,30 @@ export function attachGatewayUpgradeHandler(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /**
+   * 57-Claws Phase 5: optional path pattern for upgrade paths handled by a
+   * separate listener (e.g. /api/browser-sessions/:id/cdp).  When provided,
+   * the gateway upgrade handler returns early so those sockets are not double-
+   * consumed by the main wss.handleUpgrade call.
+   */
+  reservedUpgradePathPattern?: RegExp;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const {
+    httpServer,
+    wss,
+    canvasHost,
+    clients,
+    resolvedAuth,
+    rateLimiter,
+    reservedUpgradePathPattern,
+  } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // 57-Claws Phase 5: yield to a sibling upgrade handler for reserved paths
+      // (e.g. /api/browser-sessions/:id/cdp) so the socket is not consumed here.
+      if (reservedUpgradePathPattern?.test(req.url ?? "/")) {
+        return;
+      }
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });

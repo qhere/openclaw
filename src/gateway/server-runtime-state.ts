@@ -29,6 +29,8 @@ import {
   type HookClientIpConfig,
 } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
+// 57-Claws Phase 5: human-in-the-loop browser handoff (T2 + T3)
+import { attachBrowserSessionCdpWs } from "./server/browser-session-ws.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
@@ -37,6 +39,7 @@ import {
   type PluginRoutePathContext,
 } from "./server/plugins-http.js";
 import type { ReadinessChecker } from "./server/readiness.js";
+import { createBrowserSessionsRouter } from "./server/routes/browser-sessions.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -132,6 +135,13 @@ export async function createGatewayRuntimeState(params: {
     return shouldEnforceGatewayAuthForPluginPath(params.pluginRegistry, pathContext);
   };
 
+  // 57-Claws Phase 5: T3 resume endpoint — only active when the gateway token
+  // is configured (same env var that gates the T1 agent tool).
+  const openclawGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const browserSessionsRouter = openclawGatewayToken
+    ? createBrowserSessionsRouter({ openclawGatewayToken })
+    : null;
+
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   if (!isLoopbackHost(params.bindHost)) {
     params.log.warn(
@@ -166,6 +176,10 @@ export async function createGatewayRuntimeState(params: {
       rateLimiter: params.rateLimiter,
       getReadiness: params.getReadiness,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      // 57-Claws Phase 5: T3 resume endpoint handler
+      handleBrowserSessionsRequest: browserSessionsRouter
+        ? (req, res) => browserSessionsRouter.handleRequest(req, res)
+        : undefined,
     });
     try {
       await listenGatewayHttpServer({
@@ -193,6 +207,22 @@ export async function createGatewayRuntimeState(params: {
     noServer: true,
     maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
   });
+
+  // 57-Claws Phase 5: T2 CDP WebSocket proxy — must be registered BEFORE the
+  // gateway upgrade handler.  The gateway upgrade handler wraps its logic in an
+  // async IIFE; all Node.js upgrade listeners are invoked synchronously in
+  // registration order.  By registering the CDP handler first, it intercepts
+  // /api/browser-sessions/:id/cdp paths synchronously and the gateway async
+  // IIFE is told to skip those paths via `reservedUpgradePathPattern`, so the
+  // socket is never double-consumed.
+  if (openclawGatewayToken) {
+    for (const server of httpServers) {
+      attachBrowserSessionCdpWs({ server, wss, openclawGatewayToken });
+    }
+  }
+
+  // CDP_PATH_RE kept in sync with browser-session-ws.ts
+  const CDP_UPGRADE_PATH_RE = /^\/api\/browser-sessions\/[^/]+\/cdp$/;
   for (const server of httpServers) {
     attachGatewayUpgradeHandler({
       httpServer: server,
@@ -201,6 +231,7 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      reservedUpgradePathPattern: openclawGatewayToken ? CDP_UPGRADE_PATH_RE : undefined,
     });
   }
 
