@@ -81,6 +81,10 @@ export function shouldSkipBackendSelfPairing(params: {
   // When OPENCLAW_TRUST_BACKEND_AUTH is set (e.g. Docker deployments where
   // Paperclip connects over a bridge network), skip the loopback check for
   // backend clients that already passed shared-secret authentication.
+  //
+  // SECURITY: this bypass must only be enabled on trusted internal Docker/private
+  // networks. Never enable it when the gateway is reachable from the public
+  // internet. Always rotate OPENCLAW_GATEWAY_TOKEN regularly.
   if (params.trustAuthenticatedBackend) {
     return !params.hasBrowserOriginHeader;
   }

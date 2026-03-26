@@ -11,13 +11,13 @@
  *   - Closes with code 4403 for any disallowed method from client
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
 import type { CDPSession } from "playwright-core";
 import { WebSocketServer } from "ws";
 import type WebSocket from "ws";
 import { pendingSessionsMap } from "../../agents/tools/human-browser-login-tool.js";
+import { tokenMatches } from "./browser-session-auth.js";
 
 // ---------------------------------------------------------------------------
 // CDP method allowlists
@@ -43,21 +43,6 @@ export const CDP_ALLOWED_FROM_CHROME: readonly string[] = [
 ] as const;
 
 const CDP_PATH_RE = /^\/api\/browser-sessions\/([^/]+)\/cdp$/;
-
-// ---------------------------------------------------------------------------
-// Timing-safe token comparison (SHA-256 hex, always 64 chars)
-// ---------------------------------------------------------------------------
-
-function sha256hex(s: string): Buffer {
-  return createHash("sha256").update(s).digest();
-}
-
-function tokenMatches(provided: string | undefined, expected: string): boolean {
-  if (typeof provided !== "string") {
-    return false;
-  }
-  return timingSafeEqual(sha256hex(provided), sha256hex(expected));
-}
 
 // ---------------------------------------------------------------------------
 // Write an HTTP error response to a raw socket (for upgrade rejections)

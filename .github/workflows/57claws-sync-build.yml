@@ -178,9 +178,10 @@ jobs:
           echo "Checking Dockerfile for 57-Claws customizations..."
 
           CHECKS_PASSED=0
-          CHECKS_TOTAL=6
+          CHECKS_TOTAL=0
 
           # Check 1: python3 in apt-get
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
           if grep -q 'python3 python3-pip' Dockerfile; then
             echo "  [PASS] python3 + pip present in apt-get"
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
@@ -189,6 +190,7 @@ jobs:
           fi
 
           # Check 2: beautifulsoup4 pip install
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
           if grep -q 'beautifulsoup4' Dockerfile; then
             echo "  [PASS] beautifulsoup4 pip install present"
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
@@ -197,6 +199,7 @@ jobs:
           fi
 
           # Check 3: requests pip install
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
           if grep -q 'requests' Dockerfile; then
             echo "  [PASS] requests pip install present"
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
@@ -205,6 +208,7 @@ jobs:
           fi
 
           # Check 4: T1 human-browser-login-tool exists
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
           if [ -f "src/agents/tools/human-browser-login-tool.ts" ]; then
             echo "  [PASS] human-browser-login-tool.ts present"
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
@@ -213,6 +217,7 @@ jobs:
           fi
 
           # Check 5: T2 browser-session-ws exists
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
           if [ -f "src/gateway/server/browser-session-ws.ts" ]; then
             echo "  [PASS] browser-session-ws.ts present"
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
@@ -220,12 +225,39 @@ jobs:
             echo "  [FAIL] browser-session-ws.ts missing after merge"
           fi
 
+          # Check 5b: T2 handler is wired in runtime code (not just defined)
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
+          if grep -rn --include='*.ts' \
+              --exclude='*.test.ts' \
+              --exclude-dir='__tests__' \
+              '\battachBrowserSessionCdpWs\b' src \
+              | grep -v 'src/gateway/server/browser-session-ws\.ts' >/dev/null 2>&1; then
+            echo "  [PASS] attachBrowserSessionCdpWs is wired in runtime code"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] attachBrowserSessionCdpWs not wired — T2 endpoint is unreachable"
+          fi
+
           # Check 6: T3 browser-sessions route exists
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
           if [ -f "src/gateway/server/routes/browser-sessions.ts" ]; then
             echo "  [PASS] browser-sessions route present"
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
           else
             echo "  [FAIL] browser-sessions route missing after merge"
+          fi
+
+          # Check 6b: T3 router is wired in runtime code (not just defined)
+          CHECKS_TOTAL=$((CHECKS_TOTAL + 1))
+          if grep -rn --include='*.ts' \
+              --exclude='*.test.ts' \
+              --exclude-dir='__tests__' \
+              '\bcreateBrowserSessionsRouter\b' src \
+              | grep -v 'src/gateway/server/routes/browser-sessions\.ts' >/dev/null 2>&1; then
+            echo "  [PASS] createBrowserSessionsRouter is wired in runtime code"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] createBrowserSessionsRouter not wired — T3 endpoint is unreachable"
           fi
 
           echo ""

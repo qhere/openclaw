@@ -731,6 +731,12 @@ export function createGatewayHttpServer(opts: {
   rateLimiter?: AuthRateLimiter;
   getReadiness?: ReadinessChecker;
   tlsOptions?: TlsOptions;
+  /**
+   * 57-Claws Phase 5: optional handler for browser-session HTTP requests
+   * (POST /api/browser-sessions/:id/resume). Returns true if the request was
+   * handled so the stage pipeline can short-circuit.
+   */
+  handleBrowserSessionsRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 }): HttpServer {
   const {
     canvasHost,
@@ -749,6 +755,7 @@ export function createGatewayHttpServer(opts: {
     resolvedAuth,
     rateLimiter,
     getReadiness,
+    handleBrowserSessionsRequest,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -786,6 +793,16 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(requestPath)
         : null;
       const requestStages: GatewayHttpRequestStage[] = [
+        // 57-Claws Phase 5: browser-session resume endpoint (T3) runs first so
+        // it is reachable regardless of other feature flags.
+        ...(handleBrowserSessionsRequest
+          ? [
+              {
+                name: "browser-sessions",
+                run: () => handleBrowserSessionsRequest(req, res),
+              },
+            ]
+          : []),
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),

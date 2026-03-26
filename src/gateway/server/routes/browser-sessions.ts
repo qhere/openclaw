@@ -15,27 +15,12 @@
  *   409 { error: "already_resolved" }
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   pendingSessionsMap,
   resolveSession,
 } from "../../../agents/tools/human-browser-login-tool.js";
-
-// ---------------------------------------------------------------------------
-// Timing-safe token comparison
-// ---------------------------------------------------------------------------
-
-function sha256digest(s: string): Buffer {
-  return createHash("sha256").update(s).digest();
-}
-
-function tokenMatches(provided: string | undefined, expected: string): boolean {
-  if (typeof provided !== "string") {
-    return false;
-  }
-  return timingSafeEqual(sha256digest(provided), sha256digest(expected));
-}
+import { tokenMatches } from "../browser-session-auth.js";
 
 // ---------------------------------------------------------------------------
 // Path matching

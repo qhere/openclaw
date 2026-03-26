@@ -180,21 +180,23 @@ export function createHumanBrowserLoginTool(opts: {
       // Create a CDP session for the current page
       const cdpSession = await page.context().newCDPSession(page);
 
-      // Build the entry with a promise/resolve/reject triple
-      let resolveSession!: () => void;
-      let rejectSession_!: (err: Error) => void;
+      // Build the entry with a promise/resolve/reject triple.
+      // Local vars use distinct names to avoid shadowing the module-level
+      // resolveSession / rejectSession exports.
+      let resolvePromise!: () => void;
+      let rejectPromise!: (err: Error) => void;
 
       const promise = new Promise<void>((res, rej) => {
-        resolveSession = res;
-        rejectSession_ = rej;
+        resolvePromise = res;
+        rejectPromise = rej;
       });
       // Attach a noop catch so the rejection is never "unhandled" before our
       // try/await below has a chance to see it.
       promise.catch(() => {});
 
       const entry: PendingSessionEntry = {
-        resolve: resolveSession,
-        reject: rejectSession_,
+        resolve: resolvePromise,
+        reject: rejectPromise,
         cdpSession,
         resolved: false,
         runId,
@@ -212,6 +214,9 @@ export function createHumanBrowserLoginTool(opts: {
         await promise;
       } finally {
         clearTimeout(timer);
+        // Remove the entry so completed sessions do not accumulate indefinitely
+        // in the map (prevents memory leak in long-running processes).
+        pendingSessionsMap.delete(sessionId);
       }
 
       return jsonResult({ sessionId, status: "resumed" });

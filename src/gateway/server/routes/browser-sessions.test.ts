@@ -16,6 +16,7 @@ const pendingSessionsMock = new Map<
     cdpSession: unknown;
     resolved: boolean;
     runId: string;
+    promise: Promise<void>;
   }
 >();
 
@@ -156,6 +157,7 @@ describe("POST /api/browser-sessions/:id/resume", () => {
       cdpSession: {},
       resolved: false,
       runId: "run-1",
+      promise: Promise.resolve(),
     });
 
     const { status, body } = await callResume({ sessionId: "sess-good", token: GATEWAY_TOKEN });
@@ -176,6 +178,7 @@ describe("POST /api/browser-sessions/:id/resume", () => {
       cdpSession: {},
       resolved: true,
       runId: "run-2",
+      promise: Promise.resolve(),
     });
 
     const { status, body } = await callResume({ sessionId: "sess-done", token: GATEWAY_TOKEN });

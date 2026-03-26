@@ -24,13 +24,15 @@ After merging a new upstream tag into `main`:
 
 These must be set in the OpenClaw container (`docker-compose.yml` or `.env`):
 
-| Variable                      | Value                   | Required?      | Purpose                                                                                          |
-| ----------------------------- | ----------------------- | -------------- | ------------------------------------------------------------------------------------------------ |
-| `OPENCLAW_PAPERCLIP_API_URL`  | `http://paperclip:3100` | Yes (for tool) | Paperclip server base URL for webhook calls                                                      |
-| `OPENCLAW_GATEWAY_TOKEN`      | `<shared-secret>`       | Yes (for tool) | Shared auth token between OpenClaw ↔ Paperclip; must match `OPENCLAW_GATEWAY_TOKEN` in Paperclip |
-| `OPENCLAW_TRUST_BACKEND_AUTH` | `"true"`                | Yes (Docker)   | Allows Paperclip on Docker bridge network to authenticate without loopback check                 |
+| Variable                      | Value                   | Required?      | Purpose                                                                                                                                                                                                                                                                                                       |
+| ----------------------------- | ----------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_PAPERCLIP_API_URL`  | `http://paperclip:3100` | Yes (for tool) | Paperclip server base URL for webhook calls                                                                                                                                                                                                                                                                   |
+| `OPENCLAW_GATEWAY_TOKEN`      | `<shared-secret>`       | Yes (for tool) | Shared auth token between OpenClaw ↔ Paperclip; must match `OPENCLAW_GATEWAY_TOKEN` in Paperclip                                                                                                                                                                                                              |
+| `OPENCLAW_TRUST_BACKEND_AUTH` | `"true"`                | Yes (Docker)   | Allows Paperclip on Docker bridge network to authenticate without loopback check. **Security:** bypasses origin/loopback protections — only use on internal Docker networks; never expose this gateway to the internet with this flag set. Requires strict shared-secret rotation (`OPENCLAW_GATEWAY_TOKEN`). |
 
 If `OPENCLAW_PAPERCLIP_API_URL` or `OPENCLAW_GATEWAY_TOKEN` is missing, the `request_human_browser_login` tool is silently omitted — no error, no crash.
+
+> **Known limitation — `_getPage` requirement:** `createHumanBrowserLoginTool` internally calls `_getPage()` to obtain a Playwright `Page` for CDP session creation. The current `createOpenClawTools` registration in `openclaw-tools.ts` does not pass `_getPage`, so the tool will throw `"no _getPage provider configured"` if the model invokes it in a gateway-only deployment without a Playwright-backed browser context. This is by design for Phase 5 of the 57-Claws roadmap — a future phase will wire `_getPage` through the sandbox browser bridge. Until then, only register this tool in environments where the agent already has an active Playwright browser session.
 
 ---
 
@@ -71,7 +73,7 @@ RUN apt-get install -y --no-install-recommends \
 
 # Add this line immediately after the apt-get install block:
 # 57-Claws: beautifulsoup4 + requests for web scraping tools used by agents
-RUN pip install --no-cache-dir --break-system-packages beautifulsoup4 requests
+RUN pip install --no-cache-dir --break-system-packages beautifulsoup4==4.12.3 requests==2.32.3
 ```
 
 Verification (run in CI via `57claws-sync-build.yml`):
@@ -219,6 +221,10 @@ Add this conditional block at the BEGINNING of the function body (before existin
 // When OPENCLAW_TRUST_BACKEND_AUTH is set (e.g. Docker deployments where
 // Paperclip connects over a bridge network), skip the loopback check for
 // backend clients that already passed shared-secret authentication.
+//
+// SECURITY: this bypass must only be enabled on internal Docker/private
+// networks. Never enable it when the gateway is reachable from the public
+// internet. Always rotate OPENCLAW_GATEWAY_TOKEN regularly.
 if (params.trustAuthenticatedBackend) {
   return !params.hasBrowserOriginHeader;
 }
