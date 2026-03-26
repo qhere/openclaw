@@ -178,7 +178,7 @@ jobs:
           echo "Checking Dockerfile for 57-Claws customizations..."
 
           CHECKS_PASSED=0
-          CHECKS_TOTAL=3
+          CHECKS_TOTAL=6
 
           # Check 1: python3 in apt-get
           if grep -q 'python3 python3-pip' Dockerfile; then
@@ -202,6 +202,30 @@ jobs:
             CHECKS_PASSED=$((CHECKS_PASSED + 1))
           else
             echo "  [FAIL] requests pip install missing"
+          fi
+
+          # Check 4: T1 human-browser-login-tool exists
+          if [ -f "src/agents/tools/human-browser-login-tool.ts" ]; then
+            echo "  [PASS] human-browser-login-tool.ts present"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] human-browser-login-tool.ts missing after merge"
+          fi
+
+          # Check 5: T2 browser-session-ws exists
+          if [ -f "src/gateway/server/browser-session-ws.ts" ]; then
+            echo "  [PASS] browser-session-ws.ts present"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] browser-session-ws.ts missing after merge"
+          fi
+
+          # Check 6: T3 browser-sessions route exists
+          if [ -f "src/gateway/server/routes/browser-sessions.ts" ]; then
+            echo "  [PASS] browser-sessions route present"
+            CHECKS_PASSED=$((CHECKS_PASSED + 1))
+          else
+            echo "  [FAIL] browser-sessions route missing after merge"
           fi
 
           echo ""
